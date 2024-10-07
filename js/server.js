@@ -1,10 +1,65 @@
-const express = require('express');
-const cors = require('cors');
+const express = require("express");
+const cors = require("cors");
 
 require("dotenv").config();
-const { MongoClient, ObjectId } = require('mongodb');
+const { MongoClient, ObjectId } = require("mongodb");
 const MONGODB_URL = process.env.MONGODB_URL;
-const dbname = 'blacksmith';
+const dbname = "blacksmith";
+const weaponsCollection = "weapons";
+const materialsCollection = "materials";
+
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+
+function generateAccessToken(id, email) {
+  let payload = {
+    "user_id" : id,
+    "email" : email
+  }
+
+    // create the JWT
+    // jwt.sign()
+    // - parameter 1: the payload (sometimes known as 'claims')
+    // - parameter 2: token secret,
+    // - parameter 3: options (to set expiresIn)
+    let token = jwt.sign(payload, process.env.TOKEN_SECRET, {
+      "expiresIn" : "1h" // h for hour, d for days,
+                         // m is for minutes and
+                         // s is for seconds
+    });
+
+    return token;
+}
+
+// middleware: a function that executes before a route function
+function verifyToken(req, res, next) {
+  //get the JET from the header
+  let authHeader = req.headers["authorization"];
+  let token = null;
+  if(authHeader) {
+    // token will be stored in the header as :
+    // BEARER <JWT Token>
+    token = authHeader.split(' ')[1];
+    if(token) {
+      // the callback function in the third parameter will be called after
+      // the token has been verified
+      jwt.verify(token, process.env.TOKEN_SECRET, function(error, payload) {
+        if(error) {
+          console.error(`verifyToken: ${error.toString()}`);
+          return res.sendStatus(403);
+        }
+
+        // save the payload into the request
+        req.user = payload;
+
+        // call the next middleware or the route function
+        next();
+      });
+    }
+  }
+  return res.sendStatus(403);
+}
+
 
 let app = express();
 app.use(cors());
@@ -26,8 +81,7 @@ async function main() {
   });
 
   // Get all Materials or subset with query
-  app.get('/materials', async (req, res) => {
-    const collectionName = "materials";
+  app.get("/materials", async (req, res) => {
     try{
       const { _id, name, density } = req.query;
 
@@ -36,14 +90,8 @@ async function main() {
       if(name) query["name"]  = {$regex : name, $options: 'i'};
       if(density) query["density"] = density;
       
-      let result;
-      if(Object.keys(query).length < 1)
-        result = await db.collection(collectionName).find().toArray();
-      else {
-        console.log(query);
-        result = await db.collection(collectionName).find(query).toArray();
-      }
-        res.status(200).json({
+      let result = await db.collection(materialsCollection).find(query).toArray();
+      res.status(200).json({
         "result" : result
       });
 
@@ -55,8 +103,7 @@ async function main() {
   });
 
   // Get all weapons or subset with query
-  app.get('/weapons', async (req, res) => {
-    const collectionName = "weapons";
+  app.get("/weapons", async (req, res) => {
     try{
       const { _id, name, materialName } = req.query;
 
@@ -65,14 +112,9 @@ async function main() {
       if(name) query["name"]  = {$regex : name, $options: 'i'};
       if(materialName) query["material.name"] = {$regex: materialName, $options: 'i'};
       
-      let result;
-      if(Object.keys(query).length < 1)
-        result = await db.collection(collectionName).find().toArray();
-      else {
-        console.log(query);
-        result = await db.collection(collectionName).find(query).toArray();
-      }
-        res.status(200).json({
+      let result = await db.collection(weaponsCollection).find(query).toArray();
+      
+      res.status(200).json({
         "result" : result
       });
 
@@ -83,11 +125,29 @@ async function main() {
     }
   });
 
-  // Post new weapon unto the weapons collection
-  app.post('/weapon', async (req, res) => {
-    const { name, material, description } = req.query;
+  // get route for specific id
+  // eg. route = <root>/weapons/<id>
+  app.get("/weapons/:id", async (req, res) => {
+    try {
+      let query = { _id : new ObjectId(req.params.id) };
 
-    if(!(name && material && description)) {
+      let result = await db.collection(weaponsCollection).findOne(query);
+
+      res.status(200).json({"result": result});
+    } catch (error) {
+      console.error(`"weapon/:id" route: ${error.ToString()}`);
+      res.status(500).json("Internal Server Error!");
+    }
+  });
+
+  // Post new weapon unto the weapons collection
+  app.post("/weapons", verifyToken, async (req, res) => {
+    const { name, material, description } = req.body;
+
+    if(!( Boolean(name) &&
+          Boolean(material) &&
+          Boolean(description)
+      ) ) {
         res.status(400).json({
           "error" : "Insufficent information for required operation."
         });
@@ -97,8 +157,9 @@ async function main() {
       res.status(400).json({"error" : "weapon already exists!"});
 
     const materialDoc = await db.collection("materials")
-      .findOne({ "name": {$regex:'^'+name, $options: 'i'} });
+      .findOne({ "name": {$regex:'^'+material.name, $options: 'i'} });
 
+    console.log(materialDoc ? materialDoc.toString() : "materialDoc is null");
     if(!materialDoc)
       res.status(400).json({"error" : "material does not exist in database!"})
 
@@ -120,6 +181,152 @@ async function main() {
     });
     } catch (error) {
       console.error(`post:weapon/ "${error.toString()}"`);
+      res.status(500).json({
+        "error" : "Internal Server Error"
+      });
+    }
+  });
+
+  // route for user to sign up
+  // the user must provide an email and password
+  app.post("/users", async (req, res) => {
+    const numHashes = 12;
+    try {
+      let { email, password } = req.body;
+      if(!Boolean(email) || !Boolean(password)) {
+        return res.status(400).json({
+          "error" : "Insufficent information for required operation."
+        });
+      }
+
+      let userDoc = {
+        "email" : email,
+        "password" : await bcrypt.hash(password, numHashes)
+      };
+
+      let result = await db.collections("users").insertOne(userDoc);
+
+      res.status(201).json({
+        "message" : "New user added",
+        "result" : result
+      });
+
+    } catch (error) {
+      console.error(`post users :- ${error.toString()}`);
+      res.status(500).json({ err});
+    }
+  });
+
+  // user login
+  app.post("/login", async (req, res) => {
+    try{
+      let { email, password } = req.body;
+      if(!Boolean(email) || !Boolean(password)) {
+        res.status(400).json({
+          "error" : "Insufficent information for required operation."
+        });
+      }
+
+      let user = await db.collection("users").findOne({
+        "email" : email
+      });
+
+      if(!Boolean(user)) {
+        // check the password (compare plaintext with the hashed one in the database)
+        if(bcrypt.compareSync(password, user.password)) {
+          let accessToken = generateAccessToken(user._id, user.email);
+          res.status(202).json({
+            "accessToken" : accessToken
+          });
+          return;
+        }
+      }
+      res.status(401).json({
+        "error" : "Unauthorized"
+      });
+    } catch (error) {
+      console.error(`post login := ${error.toString()}`);
+      res.status(500).json({
+        "error" : "Internal Server Error"
+      });
+    }
+  });
+
+  app.put("/weapon/:id", async (req, res) => {
+    try {
+      let id = req.params.id;
+    
+      let { name, matName, description } = req.body;
+
+      if(!Boolean(name) || !Boolean(matName) || !Boolean(description)) {
+        return res.status(400).json({
+          "error" : "Insufficent information for required operation."
+        });
+      }
+
+      let materialDoc = await db.collection(materialsCollection).findOne({
+        "name" : materialName
+      });
+
+      if(!Boolean(materialDoc)) {
+        return res.status(400).json({
+          "error" : "Material does not exist!"
+        });
+      }
+
+      let updatedDoc = {
+        "name" : name,
+        "material" : {
+          "_id" : new ObjectId(materialDoc._id),
+          "name" : materialDoc.name
+        },
+        "description" : description
+      }
+
+      let result = db.collection(weaponsCollection).updateOne({
+        "_id" : new ObjectId(id)
+      }, {
+        "$set" : updatedDoc
+      });
+
+      if(result.matchedCoumt == 0) {
+        return res.status(404).json({
+          "error" : `Weapon id{${id}} does not exist!`
+        });
+      }
+
+      res.status(200).json({
+        "message" : "Weapon updated"
+      });
+      
+    } catch (error) {
+      console.error(`put weapons/:id :- ${error}`);
+      res.status(500).json({
+        "error" : "Internal Server Error"
+      });
+    }
+  });
+
+  app.delete("/weapons/:id", verifyToken, async (req, res) => {
+    try {
+      let id = req.params.id;
+
+      let result = await db.collection(weaponsCollection).deleteOne({
+        "_id" : new ObjectId(id)
+      });
+
+      if(result.deletedCount == 0) {
+        return res.status(404).json({
+          "error" : `Weapon with id{${id}} not found`
+        });
+      }
+
+      res.status(202).json({
+        "message" : "Weapon deleted"
+      });
+
+    } catch (error) {
+      console.error(`delete weapons/:id :- ${error}`);
       res.status(500).json({
         "error" : "Internal Server Error"
       });
