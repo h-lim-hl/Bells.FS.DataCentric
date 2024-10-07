@@ -40,6 +40,7 @@ function verifyToken(req, res, next) {
     // token will be stored in the header as :
     // BEARER <JWT Token>
     token = authHeader.split(' ')[1];
+    console.log(`11${token}`);
     if(token) {
       // the callback function in the third parameter will be called after
       // the token has been verified
@@ -48,16 +49,15 @@ function verifyToken(req, res, next) {
           console.error(`verifyToken: ${error.toString()}`);
           return res.sendStatus(403);
         }
-
+        console.log("1");
         // save the payload into the request
         req.user = payload;
 
         // call the next middleware or the route function
         next();
       });
-    }
-  }
-  return res.sendStatus(403);
+    } else { return res.sendStatus(403); }
+  } else { return res.sendStatus(403); }
 }
 
 
@@ -204,7 +204,7 @@ async function main() {
         "password" : await bcrypt.hash(password, numHashes)
       };
 
-      let result = await db.collections("users").insertOne(userDoc);
+      let result = await db.collection("users").insertOne(userDoc);
 
       res.status(201).json({
         "message" : "New user added",
@@ -213,7 +213,7 @@ async function main() {
 
     } catch (error) {
       console.error(`post users :- ${error.toString()}`);
-      res.status(500).json({ err});
+      res.status(500).json({"error" : "Internal Server Error."});
     }
   });
 
@@ -231,7 +231,7 @@ async function main() {
         "email" : email
       });
 
-      if(!Boolean(user)) {
+      if(Boolean(user)) {
         // check the password (compare plaintext with the hashed one in the database)
         if(bcrypt.compareSync(password, user.password)) {
           let accessToken = generateAccessToken(user._id, user.email);
@@ -252,20 +252,21 @@ async function main() {
     }
   });
 
-  app.put("/weapon/:id", async (req, res) => {
+  // Update
+  app.put("/weapons/:id", verifyToken, async (req, res) => {
     try {
       let id = req.params.id;
     
-      let { name, matName, description } = req.body;
+      let { name, material, description } = req.body;
 
-      if(!Boolean(name) || !Boolean(matName) || !Boolean(description)) {
+      if(!Boolean(name) || !Boolean(material) || !Boolean(description)) {
         return res.status(400).json({
           "error" : "Insufficent information for required operation."
         });
       }
 
       let materialDoc = await db.collection(materialsCollection).findOne({
-        "name" : materialName
+        "name" : material.name
       });
 
       if(!Boolean(materialDoc)) {
@@ -298,7 +299,7 @@ async function main() {
       res.status(200).json({
         "message" : "Weapon updated"
       });
-      
+
     } catch (error) {
       console.error(`put weapons/:id :- ${error}`);
       res.status(500).json({
