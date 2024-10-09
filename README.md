@@ -56,5 +56,5 @@ to ascertain competency of the candidate
 -->
 
 <!--
-8F4F7D1E5932D279AF245315A3C7A
+TOKEN_SECRET = 8F4F7D1E5932D279AF245315A3C7A
 -->
