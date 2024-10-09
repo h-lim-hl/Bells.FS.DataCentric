@@ -166,8 +166,8 @@ async function main() {
     const newWeapon = {
       "name" : name,
       "material" : {
-          "_id" : material._id,
-          "name" : material.name
+          "_id" : materialDoc._id,
+          "name" : materialDoc.name
       },
       "description" : description 
     };
